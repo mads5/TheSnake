@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>The Snake — PWA</title>
+  <meta name="theme-color" content="#0b1020" />
+  <!-- iOS PWA support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <!-- Production manifest reference (with dev fallback wired below) -->
+  <link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
+  <style>
+    :root { --bg:#0b1020; --bg2:#0f1330; --ui:#eaf1ff; --dim:#aab4d6; --accent:#7cc6ff; --accent2:#ff9fd2; --danger:#ff6b6b; --shadow:0 8px 30px rgba(0,0,0,.35) }
+    *{ box-sizing:border-box }
+    html,body{ height:100%; margin:0; background:radial-gradient(1200px 800px at 20% 10%,#151a3a,var(--bg),#070a16); color:var(--ui); font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; overflow:hidden }
+    .app{ display:grid; grid-template-rows:auto 1fr auto; height:100dvh; max-width:1100px; margin:0 auto; padding:10px clamp(8px,2vw,18px); gap:10px }
+    header,footer{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border-radius:16px; background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02)); border:1px solid rgba(255,255,255,.08); box-shadow:var(--shadow) }
+    .title{ font-weight:800; letter-spacing:.3px; display:flex; align-items:center; gap:8px }
+    .badge{ font-size:12px; font-weight:800; padding:2px 8px; border-radius:999px; background:linear-gradient(90deg,var(--accent),var(--accent2)); color:#071023 }
+    .controls{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+    button{ appearance:none; cursor:pointer; background:linear-gradient(90deg,var(--accent),var(--accent2)); color:#071023; font-weight:800; border:none; padding:8px 12px; border-radius:12px; box-shadow:var(--shadow) }
+    button.secondary{ background:rgba(255,255,255,.08); color:var(--ui); border:1px solid rgba(255,255,255,.12) }
+    input[type="text"]{ background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.18); border-radius:10px; color:#fff; padding:8px 10px; min-width:160px; outline:none }
+    .viewport{ position:relative; border-radius:16px; overflow:hidden; border:1px solid rgba(255,255,255,.08); background:radial-gradient(800px 600px at 70% 110%,var(--bg2),var(--bg)); box-shadow:var(--shadow) }
+    canvas{ width:100%; height:100%; display:block }
+    .overlay{ position:absolute; inset:0; display:grid; place-items:center; background:radial-gradient(600px 400px at 50% 50%,rgba(12,18,40,.65),rgba(7,10,22,.75)); color:var(--ui); text-align:center; padding:24px; transition:250ms ease; opacity:0; transform:translateY(10px); pointer-events:none }
+    .overlay.show{ opacity:1; transform:translateY(0); pointer-events:auto }
+    .overlay h1{ margin:0 0 8px; font-size:clamp(22px,5vw,42px) }
+    .overlay p{ margin:6px 0 14px; opacity:.9 }
+    footer{ justify-content:center; gap:8px }
+    .hint{ color:var(--dim); font-size:12px }
+    /* Fullscreen play mode: hide chrome, stretch viewport */
+    .app.playing{ grid-template-rows:1fr; max-width:unset; padding:0; height:100dvh }
+    .app.playing header, .app.playing footer{ display:none }
+    .app.playing .viewport{ border:none; border-radius:0 }
+    .app.playing canvas{ width:100vw; height:100dvh }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="title">🐍 The Snake <span class="badge">PWA</span></div>
+      <div class="controls">
+        <input id="playerName" type="text" placeholder="Your name…" maxlength="20" aria-label="Player name" />
+        <button id="startBtn" disabled aria-label="Start game">Start</button>
+        <button id="pauseBtn" class="secondary" disabled aria-label="Pause or resume">Pause</button>
+        <button id="lbBtn" class="secondary" aria-haspopup="dialog" aria-controls="lbModal">Leaderboards</button>
+        <span class="hint">Score: <strong id="score">0</strong></span>
+      </div>
+    </header>
+
+    <div class="viewport">
+      <canvas id="game" aria-label="Snake game canvas"></canvas>
+      <div id="overlay" class="overlay" role="dialog" aria-live="polite">
+        <div>
+          <h1 id="overlayTitle">The Snake</h1>
+          <p id="overlaySub">Enter your name, then tap Start • Swipe or use arrow keys • Wrap edges enabled</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Leaderboard Modal -->
+    <div id="lbModal" class="overlay" style="backdrop-filter: blur(2px); align-items: start;" role="dialog" aria-modal="true" aria-label="Leaderboards">
+      <div style="margin:auto; width:min(860px,96vw); background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03)); border:1px solid rgba(255,255,255,.12); border-radius:16px; box-shadow:var(--shadow); padding:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <h3 style="margin:0">Leaderboards</h3>
+          <div style="display:flex;gap:8px;">
+            <button id="exportBtn" class="secondary" aria-label="Export leaderboard as JSON">Export JSON</button>
+            <button id="closeLb" aria-label="Close leaderboards">Close</button>
+          </div>
+        </div>
+        <div id="lbError" style="display:none;color:var(--danger);font-weight:800;margin:8px 0 6px"></div>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;background:rgba(255,255,255,.04);border-radius:12px;overflow:hidden;">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:8px 10px;background:rgba(255,255,255,.05)">#</th>
+              <th style="text-align:left;padding:8px 10px;background:rgba(255,255,255,.05)">Player</th>
+              <th style="text-align:left;padding:8px 10px;background:rgba(255,255,255,.05)">Score</th>
+              <th style="text-align:left;padding:8px 10px;background:rgba(255,255,255,.05)">Timestamp</th>
+            </tr>
+          </thead>
+          <tbody id="lbBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <footer>
+      <div class="hint">Controls: Arrow keys / WASD · Touch: swipe to turn · P/Space to Pause/Resume</div>
+    </footer>
+  </div>
+
+  <script>
+  // =====================================
+  // The Snake — Production-ready (Canvas-runnable with PWA dev fallback)
+  // =====================================
+  (function(){
+    'use strict';
+
+    // ------- DOM Handles -------
+    const canvas = document.getElementById('game');
+    const app    = document.querySelector('.app');
+    const ctx    = canvas.getContext('2d');
+    const overlay= document.getElementById('overlay');
+    const oT     = document.getElementById('overlayTitle');
+    const oS     = document.getElementById('overlaySub');
+
+    const nameInput = document.getElementById('playerName');
+    const startBtn  = document.getElementById('startBtn');
+    const pauseBtn  = document.getElementById('pauseBtn');
+    const scoreEl   = document.getElementById('score');
+
+    const lbBtn     = document.getElementById('lbBtn');
+    const lbModal   = document.getElementById('lbModal');
+    const closeLb   = document.getElementById('closeLb');
+    const lbBody    = document.getElementById('lbBody');
+    const lbError   = document.getElementById('lbError');
+    const exportBtn = document.getElementById('exportBtn');
+
+    // ------- Canvas & Size -------
+    let W=0, H=0, DPR=1, S=0; // S = min dimension for scaling
+    let FR=10; // fruit radius (scaled per device)
+    function resize(){
+      DPR = Math.max(1, Math.min(3, window.devicePixelRatio||1));
+      const r = canvas.getBoundingClientRect();
+      W = Math.max(320, Math.floor(r.width));
+      H = Math.max(320, Math.floor(r.height));
+      canvas.width  = Math.floor(W * DPR);
+      canvas.height = Math.floor(H * DPR);
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+      computeScale();
+      initParallax();
+      cacheGradients();
+      fruits.forEach(f => f.grad = makeFruitGrad(f.x,f.y,f.c));
+    }
+    if('ResizeObserver' in window){ new ResizeObserver(resize).observe(canvas); }
+    else { window.addEventListener('resize', resize, {passive:true}); }
+    window.addEventListener('orientationchange', resize, {passive:true});
+
+    // ------- Game State -------
+    let lastTS = performance.now();
+    let started=false, running=false, paused=false, gameOver=false;
+    let freezeUntil=0; // pre-level ready window
+    let score=0, level=1, lastWrapTS=0, wrapGraceUntil=0;
+
+    const obstacles=[];
+    const snake={ pts:[], maxLen:520, baseTh:16, dir:{x:1,y:0}, speed:120 };
+    const fruits=[]; const MIN_FRUITS=1;
+
+    // ------- Background Parallax -------
+    const layers=[
+      {dots:[],spd:12,alpha:.12,size:[8,18]},
+      {dots:[],spd:26,alpha:.18,size:[4,12]}
+    ];
+    function initParallax(){
+      layers.forEach(l=>{ l.dots.length=0; const n=Math.floor((W*H)/90000)+12; for(let i=0;i<n;i++) l.dots.push({x:Math.random()*W,y:Math.random()*H,r:rand(l.size[0],l.size[1])}); });
+    }
+
+    // ------- Utils -------
+    const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+    const rand=(a,b)=>a+Math.random()*(b-a);
+    const torusDist=(ax,ay,bx,by)=>{ let dx=Math.abs(ax-bx), dy=Math.abs(ay-by); dx=Math.min(dx,W-dx); dy=Math.min(dy,H-dy); return Math.hypot(dx,dy) };
+    function pointRectTorusDist(px,py,ob){ // ob: center x,y with w,h
+      const rx=ob.x-ob.w/2, ry=ob.y-ob.h/2, rw=ob.w, rh=ob.h;
+      const d=(x,y)=>{ const dx=Math.max(0,Math.max(rx-x,x-(rx+rw))); const dy=Math.max(0,Math.max(ry-y,y-(ry+rh))); return Math.hypot(dx,dy); };
+      return Math.min(
+        d(px,py), d(px+W,py), d(px-W,py), d(px,py+H), d(px,py-H),
+        d(px+W,py+H), d(px-W,py+H), d(px+W,py-H), d(px-W,py-H)
+      );
+    }
+    // scale factors for consistent feel across devices
+    function computeScale(){ S = Math.min(W,H); FR = clamp(S*0.018, 9, 18); }
+
+    // ------- Key Normalization -------
+    function normalizeKey(e){ if(!e || typeof e.key !== 'string') return ''; let k = e.key; if(k === 'Spacebar') k = 'spacebar'; return k.toLowerCase(); }
+
+    // ------- Controls -------
+    let wantTurn=null;
+    window.addEventListener('keydown',e=>{
+      const k = normalizeKey(e); if(!k) return;
+      if((k==='arrowup'||k==='w') && snake.dir.y!== 1) wantTurn={x:0,y:-1};
+      if((k==='arrowdown'||k==='s') && snake.dir.y!==-1) wantTurn={x:0,y: 1};
+      if((k==='arrowleft'||k==='a') && snake.dir.x!== 1) wantTurn={x:-1,y:0};
+      if((k==='arrowright'||k==='d') && snake.dir.x!==-1) wantTurn={x: 1,y:0};
+      if(k==='p' || k===' ' || k==='space' || k==='spacebar'){ if(started) togglePause(); }
+      if(k==='escape' && lbModal.classList.contains('show')){ closeLeaderboard(); }
+    });
+    let tStart=null;
+    canvas.addEventListener('touchstart',e=>{ if(e.touches&&e.touches[0]) tStart={x:e.touches[0].clientX,y:e.touches[0].clientY}; },{passive:true});
+    canvas.addEventListener('touchmove',e=>{ if(!tStart||!(e.touches&&e.touches[0])) return; const dx=e.touches[0].clientX-tStart.x, dy=e.touches[0].clientY-tStart.y; const ax=Math.abs(dx), ay=Math.abs(dy); if(ax>24||ay>24){ if(ax>ay){ if(dx<0&&snake.dir.x!==1) wantTurn={x:-1,y:0}; if(dx>0&&snake.dir.x!==-1) wantTurn={x:1,y:0}; } else { if(dy<0&&snake.dir.y!==1) wantTurn={x:0,y:-1}; if(dy>0&&snake.dir.y!==-1) wantTurn={x:0,y:1}; } tStart=null; } },{passive:true});
+
+    // ------- UI / Overlay -------
+    function overlayShow(t,sub){ oT.textContent=t; oS.textContent=sub||''; overlay.classList.add('show'); }
+    function overlayHide(){ overlay.classList.remove('show'); }
+    overlayShow('The Snake','Enter your name, then tap Start • Swipe or use arrow keys • Wrap edges enabled');
+
+    nameInput.addEventListener('input',()=>{ startBtn.disabled = !(nameInput.value && nameInput.value.trim()); });
+    startBtn.addEventListener('click',()=>{
+      if(started) return;
+      if(!(nameInput.value && nameInput.value.trim())){ nameInput.focus(); return; }
+      started=true; running=true; paused=false; gameOver=false;
+      // enter full-screen play mode
+      app.classList.add('playing');
+      if(!document.fullscreenElement && document.documentElement.requestFullscreen){
+        document.documentElement.requestFullscreen({navigationUI:'hide'}).catch(()=>{});
+      }
+      startBtn.disabled=true; startBtn.style.display='none'; nameInput.disabled=true; pauseBtn.disabled=false;
+      overlayHide();
+      resetGame(true);
+    });
+    function togglePause(){ paused=!paused; running=!paused; if(paused){ overlayShow('Paused','Press P/Space or the button to resume'); pauseBtn.textContent='Resume'; } else { overlayHide(); pauseBtn.textContent='Pause'; } }
+    pauseBtn.addEventListener('click',()=>{ if(started) togglePause(); });
+
+    // ------- Fruits -------
+    const FRU_COLS=[["#ff8ec9","#ffd5ea"],["#ffd76b","#fff2c6"],["#9bffbe","#e1ffe9"],["#7cc6ff","#d6ecff"]];
+    function makeFruitGrad(x,y,c){ const g=ctx.createRadialGradient(x-2,y-3,2,x,y,FR+8); g.addColorStop(0,c[1]); g.addColorStop(1,c[0]); return g; }
+    function fruitSpotSafe(x,y){ for(let i=0;i<snake.pts.length;i+=2){ if(torusDist(x,y,snake.pts[i].x,snake.pts[i].y) < FR + snake.baseTh*0.9) return false; } for(const ob of obstacles){ if(pointRectTorusDist(x,y,ob) < FR + snake.baseTh*0.6) return false; } return true; }
+    function spawnFruit(){ const m=clamp(S*0.06, 28, 44); let x,y,tries=0; do{ x=rand(m,W-m); y=rand(m,H-m); tries++; if(tries>100) break; } while(!fruitSpotSafe(x,y)); const c=FRU_COLS[Math.floor(Math.random()*FRU_COLS.length)]; fruits.push({x,y,c,grad:makeFruitGrad(x,y,c)}); }
+
+    // ------- Snake -------
+    function resetSnake(){ snake.pts.length=0; const s={x:W*.5,y:H*.5}; snake.pts.push({x:s.x-12,y:s.y},{x:s.x,y:s.y}); snake.dir={x:1,y:0}; snake.maxLen=clamp(S*0.42, 240, 480); snake.baseTh=clamp(S*0.02,12,22); snake.speed=110+Math.min(100,level*18); cacheGradients(); }
+    const head=()=> snake.pts[snake.pts.length-1];
+    const grow =(n=18)=>{ snake.maxLen+=n; };
+    function trimTail(){ let total=0; for(let i=1;i<snake.pts.length;i++){ const a=snake.pts[i-1], b=snake.pts[i]; total+=torusDist(a.x,a.y,b.x,b.y); } while(total>snake.maxLen && snake.pts.length>2){ const a=snake.pts[0], b=snake.pts[1]; const seg=torusDist(a.x,a.y,b.x,b.y); const need=total-snake.maxLen; if(seg<=need){ snake.pts.shift(); total-=seg; } else { const t=need/(Math.max(seg,1e-6)); a.x=a.x+(b.x-a.x)*t; a.y=a.y+(b.y-a.y)*t; total=snake.maxLen; } } }
+
+    // ------- Cached Gradients -------
+    let bodyGrad=null; function cacheGradients(){ bodyGrad=ctx.createLinearGradient(0,0,W,H); bodyGrad.addColorStop(0,'#7cc6ff'); bodyGrad.addColorStop(.5,'#9bffbe'); bodyGrad.addColorStop(1,'#ff9fd2'); }
+
+    // ------- Obstacles -------
+    function obstacleSafe(ob){ for(let i=0;i<snake.pts.length;i+=2){ if(pointRectTorusDist(snake.pts[i].x,snake.pts[i].y,ob) < snake.baseTh*1.0) return false; } for(const f of fruits){ if(pointRectTorusDist(f.x,f.y,ob) < FR + snake.baseTh*0.4) return false; } for(const other of obstacles){ const dx=Math.abs(ob.x-other.x), dy=Math.abs(ob.y-other.y); if(dx < (ob.w+other.w)*0.6 && dy < (ob.h+other.h)*0.6) return false; } return true; }
+    function obstacleTargetCount(){ const area=W*H; const base=Math.round(clamp(area/160000,1,6)); return Math.min(base + level + (level>=4?1:0), 14); }
+    function spawnObstacles(){ obstacles.length=0; const count=obstacleTargetCount(); const margin=clamp(S*0.06, 30, 80); for(let i=0;i<count;i++){ const w=rand(S*0.06, S*0.13), h=rand(S*0.05, S*0.12); let ok=false, tries=0, x=0, y=0; while(!ok && tries<160){ x=rand(margin,W-margin); y=rand(margin,H-margin); const cand={x,y,w,h}; ok=obstacleSafe(cand); tries++; } if(ok) obstacles.push({x,y,w,h}); } }
+
+    // ------- Transitions -------
+    function resetGame(hard=false){ running=true; gameOver=false; if(hard){ score=0; level=1; obstacles.length=0; } scoreEl.textContent=score; fruits.length=0; resetSnake(); spawnObstacles(); for(let i=0;i<MIN_FRUITS;i++) spawnFruit(); overlayShow(`Level ${level}`,'Get ready…'); freezeUntil = performance.now() + 900; setTimeout(overlayHide,900); }
+    function levelUp(){ level++; snake.speed = 140 + Math.min(220, level*22); spawnObstacles(); overlayShow(`Level ${level}`,'Get ready…'); freezeUntil = performance.now() + 900; setTimeout(overlayHide,800); }
+    function endGame(){ if(gameOver) return; gameOver=true; running=false; overlayShow('Game Over','Thanks for playing!'); try{ addScoreEntry((nameInput.value||'Player').trim(), score); }catch(e){} setTimeout(()=>{ if(document.fullscreenElement && document.exitFullscreen){ document.exitFullscreen().catch(()=>{}); } app.classList.remove('playing'); pauseBtn.disabled=true; pauseBtn.textContent='Pause'; startBtn.style.display=''; startBtn.disabled=false; nameInput.disabled=false; score=0; level=1; scoreEl.textContent=score; running=false; started=false; fruits.length=0; obstacles.length=0; overlayHide(); }, 900); }
+
+    // ------- Update -------
+    function update(dt){ if(!running||!started||paused) return; if(performance.now() < freezeUntil) return; if(wantTurn){ if(wantTurn.x!==-snake.dir.x || wantTurn.y!==-snake.dir.y) snake.dir=wantTurn; wantTurn=null; } const sp=snake.speed; const h=head(); let nx=h.x+snake.dir.x*sp*dt, ny=h.y+snake.dir.y*sp*dt; let wrapped=false; if(nx<0){ nx=(nx%W+W)%W; wrapped=true } if(nx>=W){ nx=nx%W; wrapped=true } if(ny<0){ ny=(ny%H+H)%H; wrapped=true } if(ny>=H){ ny=ny%H; wrapped=true } snake.pts.push({x:nx,y:ny}); if(wrapped){ const now=performance.now(); lastWrapTS=now; wrapGraceUntil = now + 260; } for(let i=fruits.length-1;i>=0;i--){ if(torusDist(fruits[i].x,fruits[i].y,nx,ny) < FR + snake.baseTh*.5){ fruits.splice(i,1); score++; scoreEl.textContent=score; grow(18); spawnFruit(); if(score%10===0){ levelUp(); } } } if(performance.now() >= wrapGraceUntil){ const rad=snake.baseTh*.6; for(let i=0;i<snake.pts.length-16;i+=2){ const p=snake.pts[i]; if(torusDist(nx,ny,p.x,p.y) < rad){ endGame(); return; } } } for(const ob of obstacles){ if(pointRectTorusDist(nx,ny,ob) < snake.baseTh*0.55){ endGame(); return; } } trimTail(); }
+
+    // ------- Draw -------
+    function drawBG(dt){ layers.forEach(l=>{ ctx.save(); ctx.globalAlpha=l.alpha; l.dots.forEach(d=>{ d.x -= l.spd*dt; if(d.x+d.r<0) d.x=W+d.r; ctx.beginPath(); ctx.arc(d.x,d.y,d.r,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); }); ctx.restore(); }); }
+    function drawObstacles(){ ctx.save(); ctx.fillStyle='rgba(255,255,255,0.08)'; ctx.strokeStyle='rgba(255,255,255,0.18)'; ctx.lineWidth=2; for(const ob of obstacles){ roundRect(ctx, ob.x-ob.w/2, ob.y-ob.h/2, ob.w, ob.h, 8); ctx.fill(); ctx.stroke(); } ctx.restore(); }
+    function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+    function drawFruits(){ for(const f of fruits){ ctx.fillStyle=f.grad; ctx.beginPath(); ctx.arc(f.x,f.y,FR,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=.4; ctx.beginPath(); ctx.arc(f.x-4,f.y-5,Math.max(2,FR*0.28),0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill(); ctx.globalAlpha=1; } }
+    function drawSnake(){ const pts=snake.pts; if(pts.length<2) return; ctx.lineCap='round'; ctx.lineJoin='round'; for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; const jx=Math.abs(b.x-a.x), jy=Math.abs(b.y-a.y); if(jx>W*.5||jy>H*.5) continue; const t=i/pts.length; const w=snake.baseTh*(.45+.55*t); ctx.strokeStyle=bodyGrad; ctx.lineWidth=w; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); } const h=head(); ctx.beginPath(); ctx.arc(h.x,h.y,snake.baseTh*.75,0,Math.PI*2); ctx.fillStyle='rgba(255,255,255,.16)'; ctx.fill(); const d=snake.dir, eO=snake.baseTh*.35, sO=snake.baseTh*.3; const e1={x:h.x+d.x*eO+(-d.y)*sO,y:h.y+d.y*eO+( d.x)*sO}; const e2={x:h.x+d.x*eO+( d.y)*sO,y:h.y+d.y*eO+(-d.x)*sO}; const r=snake.baseTh*.14; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(e1.x,e1.y,r,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(e2.x,e2.y,r,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#0b1020'; const pr=r*.6; ctx.beginPath(); ctx.arc(e1.x+d.x*r*.2,e1.y+d.y*r*.2,pr,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(e2.x+d.x*r*.2,e2.y+d.y*r*.2,pr,0,Math.PI*2); ctx.fill(); if(performance.now()-lastWrapTS<380){ const a=1-(performance.now()-lastWrapTS)/380; ctx.beginPath(); ctx.arc(h.x,h.y,snake.baseTh*1.2,0,Math.PI*2); ctx.strokeStyle=`rgba(255,255,255,${a})`; ctx.lineWidth=3; ctx.stroke(); } }
+
+    // ------- Loop -------
+    function frame(ts){ const dt=Math.max(0, Math.min(.05, (ts-lastTS)/1000)); lastTS=ts; ctx.clearRect(0,0,W,H); drawBG(dt); drawObstacles(); update(dt); if(!paused){ drawFruits(); drawSnake(); } requestAnimationFrame(frame); }
+
+    // ------- Leaderboard (local) -------
+    const LS_KEY='snake_lb_v2';
+    function safeGetLB(){ try{ const raw=localStorage.getItem(LS_KEY); if(!raw) return []; const arr=JSON.parse(raw); return Array.isArray(arr)?arr:[]; }catch(e){ return []; } }
+    function safeSetLB(arr){ try{ localStorage.setItem(LS_KEY, JSON.stringify(arr)); }catch(e){} }
+    function addScoreEntry(name,scoreVal){ const entry={ player_name: (name||'Player'), score: Math.max(0,Math.floor(scoreVal)||0), timestamp: new Date().toISOString() }; const arr=safeGetLB(); arr.push(entry); arr.sort((a,b)=>b.score-a.score); safeSetLB(arr); }
+    function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;'); }
+    function renderLB(){ lbError.style.display='none'; lbBody.innerHTML=''; const rows=safeGetLB(); if(!rows.length){ lbError.textContent='No scores yet. Play a round!'; lbError.style.display='block'; return; } rows.forEach((r,i)=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td style="padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08)">${i+1}</td><td style="padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08)">${escapeHtml(r.player_name)}</td><td style="padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08)">${r.score}</td><td style="padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08)">${escapeHtml(r.timestamp)}</td>`; lbBody.appendChild(tr); }); }
+
+    // Pause/resume around leaderboard visibility
+    let lbWasRunning=false;
+    lbBtn.addEventListener('click',()=>{ lbWasRunning = (started && !paused); if(lbWasRunning && !paused) togglePause(); lbModal.classList.add('show'); renderLB(); });
+    function closeLeaderboard(){ lbModal.classList.remove('show'); if(lbWasRunning && paused) togglePause(); lbWasRunning=false; }
+    closeLb.addEventListener('click', closeLeaderboard);
+    lbModal.addEventListener('click', (e)=>{ if(e.target===lbModal) closeLeaderboard(); });
+    exportBtn.addEventListener('click',()=>{ const payload=JSON.stringify(safeGetLB(),null,2); const blob=new Blob([payload],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='leaderboard.json'; a.click(); URL.revokeObjectURL(a.href); });
+
+    // ------- Mini Tests (non-invasive) -------
+    (function runKeyTests(){ const results=[]; const ok=(name,cond)=>results.push({name,pass:!!cond}); ok('normalizeKey: undefined event', normalizeKey({})===''); ok('normalizeKey: undefined key', normalizeKey({key:undefined})===''); ok('normalizeKey: ArrowUp', normalizeKey({key:'ArrowUp'})==='arrowup'); ok('normalizeKey: space', normalizeKey({key:' '})===' '); ok('normalizeKey: Spacebar', normalizeKey({key:'Spacebar'})==='spacebar'); window.__snake_tests = results; })();
+
+    // ------- Kickoff -------
+    resize();
+    requestAnimationFrame(ts=>{ lastTS=ts; frame(ts); });
+  })();
+  </script>
+
+  <script>
+  // ===== PWA bootstrap: prefer production files; fallback to in-page manifest/SW for Canvas =====
+  (function(){
+    'use strict';
+
+    async function ensureManifest(){
+      const link = document.querySelector('link[rel="manifest"]');
+      if(!link) return; // nothing to do
+      try{
+        const res = await fetch(link.href, {cache:'no-cache'});
+        if(res.ok) return; // external manifest is present
+        // else fall through to inject
+      }catch(e){/* inject */}
+      // Dev fallback: build icons via canvas and attach a blob manifest
+      const makeIcon=async(size)=>{ const c=document.createElement('canvas'); c.width=c.height=size; const g=c.getContext('2d'); g.fillStyle='#0b1020'; g.fillRect(0,0,size,size); const grd=g.createLinearGradient(0,0,size,size); grd.addColorStop(0,'#7cc6ff'); grd.addColorStop(.5,'#9bffbe'); grd.addColorStop(1,'#ff9fd2'); g.fillStyle=grd; g.beginPath(); if (typeof g.roundRect==='function'){ g.roundRect(size*.12,size*.12,size*.76,size*.76,size*.18);} else { const x=size*.12,y=size*.12,w=size*.76,h=size*.76,r=size*.18; g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r); g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); } g.fill(); g.fillStyle='rgba(255,255,255,.9)'; g.font=`${Math.floor(size*.46)}px system-ui,sans-serif`; g.textAlign='center'; g.textBaseline='middle'; g.fillText('🐍', size/2, size/2+size*.02); return new Promise(r=>c.toBlob(b=>r(URL.createObjectURL(b)),'image/png')); };
+      const [i192,i512]=await Promise.all([makeIcon(192),makeIcon(512)]);
+      const manifest={ name:'The Snake', short_name:'Snake', start_url:'./', scope:'./', display:'standalone', background_color:'#0b1020', theme_color:'#0b1020', icons:[{src:i192,sizes:'192x192',type:'image/png',purpose:'any maskable'},{src:i512,sizes:'512x512',type:'image/png',purpose:'any maskable'}] };
+      const mUrl=URL.createObjectURL(new Blob([JSON.stringify(manifest)],{type:'application/json'}));
+      link.href=mUrl;
+      window.addEventListener('beforeunload',()=>{ try{ URL.revokeObjectURL(mUrl); URL.revokeObjectURL(i192); URL.revokeObjectURL(i512);}catch(e){} },{once:true});
+    }
+
+    async function ensureServiceWorker(){
+      if(!('serviceWorker' in navigator)) return;
+      try{
+        await navigator.serviceWorker.register('sw.js',{scope:'./'});
+      }catch(e){
+        // Dev fallback: inline SW
+        const swCode=`const CACHE='snake-pwa-v2'; const PRECACHE=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png']; self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(PRECACHE)).then(()=>self.skipWaiting()))}); self.addEventListener('activate',e=>{e.waitUntil((async()=>{const ks=await caches.keys(); await Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k))); await self.clients.claim();})())}); self.addEventListener('fetch',e=>{const r=e.request; if(r.method!=='GET') return; if(r.mode==='navigate'){ e.respondWith(fetch(r).then(res=>{const cp=res.clone(); caches.open(CACHE).then(c=>c.put(r,cp)); return res;}).catch(()=>caches.match('./'))); return;} const isHTML=(r.headers.get('accept')||'').includes('text/html'); if(isHTML){ e.respondWith(fetch(r).catch(()=>caches.match(r))); return; } e.respondWith(caches.match(r).then(c=>c||fetch(r).then(res=>{const cp=res.clone(); caches.open(CACHE).then(ca=>ca.put(r,cp)); return res;}))); });`;
+        const swUrl=URL.createObjectURL(new Blob([swCode],{type:'text/javascript'}));
+        try{ await navigator.serviceWorker.register(swUrl,{scope:'./'});}catch(_e){}
+        window.addEventListener('beforeunload',()=>{ try{ URL.revokeObjectURL(swUrl);}catch(_){} },{once:true});
+      }
+    }
+
+    ensureManifest();
+    ensureServiceWorker();
+  })();
+  </script>
+</body>
+</html>
